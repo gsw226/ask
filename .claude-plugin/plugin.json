@@ -1,0 +1,6 @@
+{
+  "name": "ask",
+  "version": "0.1.0",
+  "description": "While Claude works, questions go to a read-only side agent; change requests go to the main queue",
+  "author": { "name": "gsw226" }
+}
