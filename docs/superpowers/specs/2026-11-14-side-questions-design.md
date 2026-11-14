@@ -1,4 +1,4 @@
-# ask — 작업 중 옆 질문 자동 분기 (Claude Code mod)
+# meanwhile — 작업 중 옆 질문 자동 분기 (Claude Code mod)
 
 ## 문제
 
@@ -43,7 +43,7 @@ Claude Code mod (JS 플러그인, CLI v2.1.287+). 래퍼 TUI(Agent SDK)와 setti
 ## 옆 에이전트
 
 - 질문 1개당 `$.agent.spawn` 1개. 동시 실행 제한 없음.
-- **읽기 전용 강제**: `$.agent.register`로 `ask:side` 타입을 tools `Read, Grep, Glob, WebSearch, WebFetch`로 등록 (Bash 제외).
+- **읽기 전용 강제**: `$.agent.register`로 `meanwhile:side` 타입을 tools `Read, Grep, Glob, WebSearch, WebFetch`로 등록 (Bash 제외).
   메인 모델에게는 `agent.offer`로 숨김. 이유: 메인과의 파일 충돌 방지.
 - **맥락 주입**: spawn 프롬프트 = 질문 + `$.session.messages()` 최근 30개(최대 8,000자로 자름) +
   역할 지시("옆 질문 담당, 읽기만, 짧게 답, 수정이 필요하면 '메인에 보낼 일'이라고 말할 것").
@@ -54,7 +54,7 @@ Claude Code mod (JS 플러그인, CLI v2.1.287+). 래퍼 TUI(Agent SDK)와 setti
 (2026-11-14 변경: 패널 → 대화 안의 행) 질문마다 `$.ui.place`로 트랜스크립트에 행 하나를 두고 Claude 자신의 턴처럼 그린다.
 
 ```
-› 질문                     ask
+› 질문                     meanwhile
   ⎿  Read hooks/register.js     (최근 3개, 넘치면 "⎿  … +N")
 ● 답변 (Markdown)
   [메인에 보내기]               (실패했거나 답이 "메인에 보낼 일"로 시작할 때)

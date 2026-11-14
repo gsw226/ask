@@ -6,7 +6,7 @@
   "description": "gsw226's Claude Code plugins",
   "plugins": [
     {
-      "name": "ask",
+      "name": "meanwhile",
       "source": "./",
       "description": "While Claude works, questions go to a read-only side agent; change requests go to the main queue"
     }

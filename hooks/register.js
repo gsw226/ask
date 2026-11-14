@@ -1,5 +1,5 @@
-// ask: while Claude works, questions go to a read-only side agent; changes go to the main queue.
-const AGENT = 'ask:side'
+// meanwhile: while Claude works, questions go to a read-only side agent; changes go to the main queue.
+const AGENT = 'meanwhile:side'
 const STEPS_SHOWN = 3
 const STEP_POLL_MS = 1000
 
@@ -148,7 +148,7 @@ export function register(on) {
     if (e.isMeta) {
       // our side agent's hand-back would wake main; keep it out
       const ours = entries.some((x) => x.agentId && e.text.includes('from="' + x.agentId + '"'))
-      return ours ? { drop: 'ask: 옆 답변 완료' } : next(e)
+      return ours ? { drop: 'meanwhile: 옆 답변 완료' } : next(e)
     }
     if (!e.turnId) {
       if (e.command || e.origin.kind !== 'composer' || unseen.length === 0) return next(e)
@@ -169,7 +169,7 @@ export function register(on) {
     $.clock.after(0, () => startSide($, entry))
     // drop puts the text back in the prompt box; empty it once the drop lands
     $.clock.after(300, () => clearInput($, e.text))
-    return { drop: 'ask: 옆 질문으로 보냄' }
+    return { drop: 'meanwhile: 옆 질문으로 보냄' }
   })
 
   on('tool.call', async ($, e, next) => {
@@ -227,7 +227,7 @@ function drawEntry($, { Box, Text, Markdown, Button }, x) {
     Box({ flexDirection: 'row', children: [
       Text({ dimColor: true, children: ['› '] }),
       Text({ wrap: 'wrap', children: [x.question] }),
-      Text({ dimColor: true, children: ['  ask'] }),
+      Text({ dimColor: true, children: ['  meanwhile'] }),
     ] }),
   ]
   const hidden = x.steps.length - STEPS_SHOWN

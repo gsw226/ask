@@ -36,7 +36,7 @@ test('busy question is dropped from main and spawns the side agent', async ($, o
   expect(r.drop).toBeDefined()
   await clock.advance(500)
   expect(spawned).toHaveLength(1)
-  expect(spawned[0].subagent_type).toBe('ask:side')
+  expect(spawned[0].subagent_type).toBe('meanwhile:side')
   expect(spawned[0].prompt).toContain('where is foo?')
   expect(spawned[0].prompt).toContain('fix the parser')
 })
@@ -115,9 +115,9 @@ test('next idle main prompt carries the side Q&A once', async ($, on) => {
 })
 
 const ROW_EVENT = {
-  plugin: 'ask', component: 'Placed', requestId: 'r1', surface: 'terminal',
+  plugin: 'meanwhile', component: 'Placed', requestId: 'r1', surface: 'terminal',
   viewport: { columns: 100, rows: 30 },
-  props: { id: 'q-1', plugin: 'ask', onScreen: true },
+  props: { id: 'q-1', plugin: 'meanwhile', onScreen: true },
 }
 let placedId = 'q-1'
 const rowEvent = () => ({ ...ROW_EVENT, props: { ...ROW_EVENT.props, id: placedId } })
@@ -228,7 +228,7 @@ test('session.start registers the read-only side agent', async ($, on) => {
 })
 
 test('main model is never offered the side agent', async ($) => {
-  const r = await $.agent.offer({ agent: 'ask:side' } as any)
+  const r = await $.agent.offer({ agent: 'meanwhile:side' } as any)
   expect(r.isOffered).toBe(false)
 })
 

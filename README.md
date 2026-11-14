@@ -1,4 +1,4 @@
-# ask
+# meanwhile
 
 A Claude Code mod. While Claude is working, type as usual:
 
@@ -11,18 +11,18 @@ Classification uses Haiku. Any failure falls back to the normal behavior (the in
 
 In a Claude Code session (2.1.275 or later):
 
-    /plugin install ask --marketplace gsw226/ask
+    /plugin install meanwhile --marketplace gsw226/meanwhile
 
 Or in two steps:
 
-    /plugin marketplace add gsw226/ask
-    /plugin install ask@gsw226
+    /plugin marketplace add gsw226/meanwhile
+    /plugin install meanwhile@gsw226
 
 Then run `/reload-plugins` or start a new session.
 
 To try it without installing, from a clone:
 
-    claude --plugin-dir /path/to/ask
+    claude --plugin-dir /path/to/meanwhile
 
 Tested with Claude Code 2.1.325.
 
