@@ -3,8 +3,8 @@ import { expect, mock, test } from 'claude-code/testing'
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const label = (text: string) => () => ({ value: { isAnswered: true, text, usage: USAGE } })
 
-function stubCommon(on: any, spawned: any[] = [], submitted: string[] = [], fills: any[] = [], logs: string[] = []) {
-  on('prompt.submit', ($: any, e: any) => { submitted.push(e.text); return { text: e.text, context: e.context } })
+function stubCommon(on: any, spawned: any[] = [], submitted: string[] = [], fills: any[] = [], logs: string[] = [], dropResubmit = false) {
+  on('prompt.submit', ($: any, e: any) => { submitted.push(e.text); return dropResubmit && !e.turnId ? { drop: 'removed' } : { text: e.text, context: e.context } })
   on('prompt.fill', (_$: any, e: any) => { fills.push(e); return { isFilled: true } })
   on('session.messages', () => ({ value: [{ role: 'user', text: 'fix the parser', toolUses: [] }] }))
   on('agent.spawn', ($: any, e: any) => { spawned.push(e); return { model: 'test', result: { status: 'async_launched', agentId: 'ag' + spawned.length, description: 'd', prompt: 'p', outputFile: '/tmp/o' } } })
@@ -126,4 +126,18 @@ test('pane lists question, answer and a send button for failed entries', async (
   expect(await ui.find({ type: 'Text', text: /where is foo\?/ })).toBeDefined()
   await ui.press({ key: 'send-1' })
   expect(submitted).toContain('where is foo?')
+  expect(await ui.find({ key: 'send-1' })).toBeUndefined()
+})
+
+test('button comes back when the submit is dropped', async ($, on) => {
+  const clock = mock.clock(on)
+  on('model.complete', label('question'))
+  stubCommon(on, [], [], [], [], true)
+  on('turn.complete', () => ({ text: '' }))
+  await askOne($, clock)
+  await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: '', durationMs: 1, isAborted: true, reason: 'answer' })
+  const ui = await $.ui.mount(PANE_EVENT)
+  await ui.press({ key: 'send-1' })
+  await clock.advance(10)
+  expect(await ui.find({ key: 'send-1' })).toBeDefined()
 })

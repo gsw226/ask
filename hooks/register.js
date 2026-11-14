@@ -61,10 +61,17 @@ async function clearInput($, text) {
   } catch {}
 }
 
+function resetSent($, entry) {
+  entry.sent = false
+  $.ui.invalidate('ui.render')
+}
+
 function sendToMain($, entry) {
   entry.sent = true
   // waits until main is idle, then runs as the user's own prompt; not awaited on purpose
+  // a dropped or failed submit brings the button back
   $.prompt.submit({ text: entry.question, asUser: true })
+    .then((r) => { if (r && r.drop) resetSent($, entry) }, () => resetSent($, entry))
   $.ui.invalidate('ui.render')
 }
 
