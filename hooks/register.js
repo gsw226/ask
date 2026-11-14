@@ -1,6 +1,7 @@
 // ask: while Claude works, questions go to a read-only side agent; changes go to the main queue.
-const PANE = 'asks'
 const AGENT = 'ask:side'
+const STEPS_SHOWN = 3
+const STEP_POLL_MS = 1000
 
 const CLASSIFY_SYSTEM = [
   'You route a message the user typed while a coding agent is busy. Reply with exactly one word.',
@@ -17,8 +18,40 @@ const SIDE_PROMPT = [
 
 const entries = []
 let seq = 0
+// row ids must not repeat across module reloads: a reused id redraws the old row instead of adding one
+const LOAD = Date.now().toString(36)
+const rowId = (entry) => 'q-' + LOAD + '-' + entry.id
 // answered side Q&A main has not seen yet
 const unseen = []
+let cwd = ''
+
+// "Read src/foo.ts", the way Claude's own tool rows read
+function stepOf(e) {
+  const arg = String(e.file_path ?? e.pattern ?? e.query ?? e.url ?? '')
+  return e.tool + ' ' + (cwd && arg.startsWith(cwd + '/') ? arg.slice(cwd.length + 1) : arg)
+}
+
+// The side agent's own tool events skip this mod (it runs under our origin), so its steps
+// are read back from its conversation instead.
+async function readSteps($, entry) {
+  try {
+    const msgs = await $.session.messages({ agentId: entry.agentId })
+    if (!Array.isArray(msgs)) return
+    const steps = msgs.flatMap((m) => m.toolUses || []).filter((u) => u.tool !== 'SubagentHandback')
+      .map((u) => stepOf({ ...u.input, tool: u.tool }))
+    if (steps.length !== entry.steps.length) {
+      entry.steps = steps
+      $.ui.invalidate('ui.render')
+    }
+  } catch {}
+}
+
+function watchSteps($, entry) {
+  const timer = $.clock.every(STEP_POLL_MS, () => {
+    if (entry.status !== 'running') return timer.cancel()
+    return readSteps($, entry)
+  })
+}
 
 async function classify($, text) {
   try {
@@ -46,6 +79,7 @@ async function startSide($, entry) {
       entry.answer = r.deny
     } else {
       entry.agentId = r.agentId
+      watchSteps($, entry)
     }
   } catch (err) {
     entry.status = 'failed'
@@ -85,9 +119,7 @@ export function register(on) {
         tools: ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'],
       })
     } catch {}
-    try {
-      await $.command.register({ name: 'asks', description: 'Show side-question answers', immediate: true })
-    } catch {}
+    cwd = e.cwd || ''
     return next(e)
   })
 
@@ -98,7 +130,7 @@ export function register(on) {
     if (e.isMeta) {
       // our side agent's hand-back would wake main; keep it out
       const ours = entries.some((x) => x.agentId && e.text.includes('from="' + x.agentId + '"'))
-      return ours ? { drop: 'ask: 옆 답변 도착 (/asks)' } : next(e)
+      return ours ? { drop: 'ask: 옆 답변 완료' } : next(e)
     }
     if (!e.turnId) {
       if (e.command || e.origin.kind !== 'composer' || unseen.length === 0) return next(e)
@@ -108,12 +140,13 @@ export function register(on) {
     }
     if (e.command || e.origin.kind !== 'composer' || e.attachments?.length || e.wait) return next(e)
     if ((await classify($, e.text)) !== 'question') return next(e)
-    const entry = { id: ++seq, question: e.text, status: 'running', answer: '' }
+    const entry = { id: ++seq, question: e.text, status: 'running', answer: '', steps: [], placed: false }
     entries.push(entry)
+    // a row in the transcript, drawn like Claude's own turn; falls back to a log line at the end
+    $.ui.place({ id: rowId(entry) }).then((r) => { entry.placed = r.isPlaced }, () => {})
     $.clock.after(0, () => startSide($, entry))
     // drop puts the text back in the prompt box; empty it once the drop lands
     $.clock.after(300, () => clearInput($, e.text))
-    $.ui.open({ id: PANE, title: 'ask' }).catch(() => {})
     return { drop: 'ask: 옆 질문으로 보냄' }
   })
 
@@ -126,34 +159,44 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     const entry = e.agentId ? entries.find((x) => x.agentId === e.agentId) : undefined
     if (entry) {
+      await readSteps($, entry)
       entry.status = e.isAborted || e.reason !== 'answer' || !e.answer ? 'failed' : 'done'
       entry.answer = e.answer || (e.isAborted ? '중단됨' : e.reason)
       if (entry.status === 'done') unseen.push(entry)
-      $.ui.log('Q: ' + entry.question + '\nA: ' + entry.answer)
+      if (!entry.placed) $.ui.log('Q: ' + entry.question + '\nA: ' + entry.answer)
       $.ui.invalidate('ui.render')
     }
     return next(e)
   })
 
-  on('command.run', { command: 'asks' }, async ($) => {
-    await $.ui.open({ id: PANE, title: 'ask', focus: true, closeOnEscape: true })
-    return {}
-  })
-
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId !== PANE) return next(e)
+  on('ui.render', { component: 'Placed' }, async ($, e, next) => {
+    const x = e.props.plugin === $.plugin.name ? entries.find((y) => rowId(y) === e.props.id) : undefined
+    if (!x) return next(e)
     const { Box, Text, Markdown, Button } = $.ui.resolve(e)
-    const mark = { running: '⏳', done: '✓', failed: '✗' }
-    const rows = []
-    for (const x of entries.slice().reverse()) {
-      rows.push(Text({ bold: true, wrap: 'wrap', children: [mark[x.status] + ' ' + x.question] }))
-      if (x.answer) rows.push(Markdown({ text: x.answer, dimColor: x.status === 'failed' }))
-      const needsMain = x.status === 'failed' || x.answer.includes('메인에 보낼 일')
-      if (needsMain && !x.sent) {
-        rows.push(Button({ key: 'send-' + x.id, label: '메인에 보내기', onPress: () => sendToMain($, x) }))
-      }
-      rows.push(Text({ children: [' '] }))
+    const rows = [
+      Box({ flexDirection: 'row', children: [
+        Text({ dimColor: true, children: ['› '] }),
+        Text({ wrap: 'wrap', children: [x.question] }),
+        Text({ dimColor: true, children: ['  ask'] }),
+      ] }),
+    ]
+    const hidden = x.steps.length - STEPS_SHOWN
+    if (hidden > 0) rows.push(Text({ dimColor: true, children: ['  ⎿  … +' + hidden] }))
+    for (const step of x.steps.slice(-STEPS_SHOWN)) {
+      rows.push(Text({ dimColor: true, wrap: 'truncate-end', children: ['  ⎿  ' + step] }))
     }
-    return Box({ flexDirection: 'column', children: rows })
+    if (x.status === 'running') rows.push(Text({ dimColor: true, children: ['  ⎿  …'] }))
+    if (x.answer) {
+      rows.push(Box({ flexDirection: 'row', children: [
+        Text({ dimColor: x.status === 'failed', children: ['● '] }),
+        Box({ flexDirection: 'column', flexShrink: 1, children: [Markdown({ text: x.answer, dimColor: x.status === 'failed' })] }),
+      ] }))
+    }
+    // the side agent opens its answer with "메인에 보낼 일:" (maybe in markdown) when a change is needed
+    const needsMain = x.status === 'failed' || /^[\s*_>#-]*메인에 보낼 일/.test(x.answer)
+    if (needsMain && !x.sent) {
+      rows.push(Box({ paddingLeft: 2, children: [Button({ key: 'send-' + x.id, label: '메인에 보내기', onPress: () => sendToMain($, x) })] }))
+    }
+    return Box({ flexDirection: 'column', marginTop: 1, children: rows })
   })
 }

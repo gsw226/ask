@@ -2,7 +2,7 @@
 
 A Claude Code mod. While Claude is working, type as usual:
 
-- **Questions** go to a read-only side agent. The answer shows up in the `ask` pane (`/asks`) and in the transcript, and main Claude gets it as context on your next prompt.
+- **Questions** go to a read-only side agent. It answers right in the conversation, drawn like Claude's own turn (`›` your question, `⎿` the files it reads, `●` the answer), and main Claude gets the Q&A as context on your next prompt.
 - **Change requests** go to the main queue as they always do.
 
 Classification uses Haiku. Any failure falls back to the normal behavior (the input goes to main).
