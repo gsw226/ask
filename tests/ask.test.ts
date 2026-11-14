@@ -141,3 +141,86 @@ test('button comes back when the submit is dropped', async ($, on) => {
   await clock.advance(10)
   expect(await ui.find({ key: 'send-1' })).toBeDefined()
 })
+
+test('busy input with an attachment passes through even if it looks like a question', async ($, on) => {
+  mock.clock(on)
+  const spawned: any[] = []
+  on('model.complete', label('question'))
+  stubCommon(on, spawned)
+  const r = await $.prompt.submit({ text: 'what is this?', origin: { kind: 'composer' }, wait: false, turnId: 't1', attachments: [{ id: 'a1' }] } as any)
+  expect(r.text).toBe('what is this?')
+  expect(spawned).toHaveLength(0)
+})
+
+test('explicitly queued prompt passes through', async ($, on) => {
+  mock.clock(on)
+  const spawned: any[] = []
+  on('model.complete', label('question'))
+  stubCommon(on, spawned)
+  const r = await $.prompt.submit({ text: 'where is foo?', origin: { kind: 'composer' }, wait: true, turnId: 't1' })
+  expect(r.text).toBe('where is foo?')
+  expect(spawned).toHaveLength(0)
+})
+
+test('errored side answer is failed, has a button and is not attached to main', async ($, on) => {
+  const clock = mock.clock(on)
+  on('model.complete', label('question'))
+  stubCommon(on)
+  on('turn.complete', () => ({ text: '' }))
+  await askOne($, clock)
+  await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: '', durationMs: 1, isAborted: false, reason: 'error' })
+  const ui = await $.ui.mount(PANE_EVENT)
+  expect(await ui.find({ key: 'send-1' })).toBeDefined()
+  const next = await $.prompt.submit({ text: 'continue', origin: { kind: 'composer' }, wait: false })
+  expect(next.context ?? []).toHaveLength(0)
+})
+
+test('markdown-bold "메인에 보낼 일" answer shows the send button', async ($, on) => {
+  const clock = mock.clock(on)
+  on('model.complete', label('question'))
+  stubCommon(on)
+  on('turn.complete', () => ({ text: '' }))
+  await askOne($, clock)
+  await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: '**메인에 보낼 일:** rename foo', durationMs: 1, isAborted: false, reason: 'answer' })
+  const ui = await $.ui.mount(PANE_EVENT)
+  expect(await ui.find({ key: 'send-1' })).toBeDefined()
+})
+
+test('/clear drops unseen side Q&A', async ($, on) => {
+  const clock = mock.clock(on)
+  on('model.complete', label('question'))
+  stubCommon(on)
+  on('turn.complete', () => ({ text: '' }))
+  on('session.end', (_$: any, e: any) => ({ sessionId: e.sessionId }))
+  await askOne($, clock)
+  await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: 'foo is in src/foo.ts', durationMs: 1, isAborted: false, reason: 'answer' })
+  await $.session.end({ reason: 'clear', sessionId: 's', resume: {} } as any)
+  const r = await $.prompt.submit({ text: 'continue', origin: { kind: 'composer' }, wait: false })
+  expect(r.context ?? []).toHaveLength(0)
+})
+
+test('pane draws the answer as Markdown', async ($, on) => {
+  const clock = mock.clock(on)
+  on('model.complete', label('question'))
+  stubCommon(on)
+  on('turn.complete', () => ({ text: '' }))
+  await askOne($, clock)
+  await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: 'see **src/foo.ts**', durationMs: 1, isAborted: false, reason: 'answer' })
+  const ui = await $.ui.mount(PANE_EVENT)
+  expect(await ui.find({ type: 'Markdown' })).toBeDefined()
+})
+
+test('session.start registers the read-only side agent', async ($, on) => {
+  const regs: any[] = []
+  on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('agent.register', (_$: any, e: any) => { regs.push(e); return { value: { isRegistered: true } } })
+  on('command.register', () => ({ value: { isRegistered: true } }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true } as any)
+  expect(regs).toHaveLength(1)
+  expect(regs[0].tools).toEqual(['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'])
+})
+
+test('main model is never offered the side agent', async ($) => {
+  const r = await $.agent.offer({ agent: 'ask:side' } as any)
+  expect(r.isOffered).toBe(false)
+})

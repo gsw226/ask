@@ -106,7 +106,7 @@ export function register(on) {
       const ctx = 'While you were working, the user asked side questions that a read-only helper answered:\n\n' + notes
       return next({ ...e, context: [...(e.context ?? []), ctx] })
     }
-    if (e.command || e.origin.kind !== 'composer') return next(e)
+    if (e.command || e.origin.kind !== 'composer' || e.attachments?.length || e.wait) return next(e)
     if ((await classify($, e.text)) !== 'question') return next(e)
     const entry = { id: ++seq, question: e.text, status: 'running', answer: '' }
     entries.push(entry)
@@ -117,11 +117,17 @@ export function register(on) {
     return { drop: 'ask: 옆 질문으로 보냄' }
   })
 
+  // /clear starts a new conversation; old side Q&A must not leak into it
+  on('session.end', ($, e, next) => {
+    unseen.length = 0
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     const entry = e.agentId ? entries.find((x) => x.agentId === e.agentId) : undefined
     if (entry) {
-      entry.status = e.isAborted ? 'failed' : 'done'
-      entry.answer = e.answer || (e.isAborted ? '중단됨' : '')
+      entry.status = e.isAborted || e.reason !== 'answer' || !e.answer ? 'failed' : 'done'
+      entry.answer = e.answer || (e.isAborted ? '중단됨' : e.reason)
       if (entry.status === 'done') unseen.push(entry)
       $.ui.log('Q: ' + entry.question + '\nA: ' + entry.answer)
       $.ui.invalidate('ui.render')
@@ -136,13 +142,13 @@ export function register(on) {
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Markdown, Button } = $.ui.resolve(e)
     const mark = { running: '⏳', done: '✓', failed: '✗' }
     const rows = []
     for (const x of entries.slice().reverse()) {
       rows.push(Text({ bold: true, wrap: 'wrap', children: [mark[x.status] + ' ' + x.question] }))
-      if (x.answer) rows.push(Text({ wrap: 'wrap', dimColor: x.status === 'failed', children: [x.answer] }))
-      const needsMain = x.status === 'failed' || x.answer.startsWith('메인에 보낼 일')
+      if (x.answer) rows.push(Markdown({ text: x.answer, dimColor: x.status === 'failed' }))
+      const needsMain = x.status === 'failed' || x.answer.includes('메인에 보낼 일')
       if (needsMain && !x.sent) {
         rows.push(Button({ key: 'send-' + x.id, label: '메인에 보내기', onPress: () => sendToMain($, x) }))
       }
