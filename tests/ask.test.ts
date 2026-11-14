@@ -3,13 +3,13 @@ import { expect, mock, test } from 'claude-code/testing'
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const label = (text: string) => () => ({ value: { isAnswered: true, text, usage: USAGE } })
 
-function stubCommon(on: any, spawned: any[] = [], submitted: string[] = [], fills: any[] = []) {
+function stubCommon(on: any, spawned: any[] = [], submitted: string[] = [], fills: any[] = [], logs: string[] = []) {
   on('prompt.submit', ($: any, e: any) => { submitted.push(e.text); return { text: e.text, context: e.context } })
   on('prompt.fill', (_$: any, e: any) => { fills.push(e); return { isFilled: true } })
   on('session.messages', () => ({ value: [{ role: 'user', text: 'fix the parser', toolUses: [] }] }))
-  on('agent.spawn', ($: any, e: any) => { spawned.push(e); return { model: 'test', agentId: 'ag' + spawned.length } })
+  on('agent.spawn', ($: any, e: any) => { spawned.push(e); return { model: 'test', result: { status: 'async_launched', agentId: 'ag' + spawned.length, description: 'd', prompt: 'p', outputFile: '/tmp/o' } } })
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', (_$: any, e: any) => { logs.push(e.text); return { value: undefined } })
 }
 
 test('idle input passes through untouched, no classification', async ($, on) => {
@@ -69,4 +69,41 @@ test('box still holding the dropped question is cleared', async ($, on) => {
 test('text the user typed meanwhile is left alone', async ($, on) => {
   const fills = await dropThenBox(on, $, 'where is foo? and bar')
   expect(fills).toHaveLength(0)
+})
+
+async function askOne($: any, clock: any) {
+  await $.prompt.submit({ text: 'where is foo?', origin: { kind: 'composer' }, wait: false, turnId: 't1' })
+  await clock.advance(500)
+}
+
+test('side answer is logged and its hand-back is dropped from main', async ($, on) => {
+  const clock = mock.clock(on)
+  const logs: string[] = []
+  on('model.complete', label('question'))
+  stubCommon(on, [], [], [], logs)
+  on('turn.complete', () => ({ text: '' }))
+  await askOne($, clock)
+  await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: 'foo is in src/foo.ts', durationMs: 1, isAborted: false, reason: 'answer' })
+  expect(logs.join('\n')).toContain('foo is in src/foo.ts')
+  const back = await $.prompt.submit({ text: '<agent-message from="ag1">\n  foo is in src/foo.ts\n</agent-message>', origin: { kind: 'peer' }, wait: false, isMeta: true })
+  expect(back.drop).toBeDefined()
+})
+
+test('another agent hand-back passes through', async ($, on) => {
+  stubCommon(on)
+  const r = await $.prompt.submit({ text: '<agent-message from="zzz">hi</agent-message>', origin: { kind: 'peer' }, wait: false, isMeta: true })
+  expect(r.text).toContain('zzz')
+})
+
+test('next idle main prompt carries the side Q&A once', async ($, on) => {
+  const clock = mock.clock(on)
+  on('model.complete', label('question'))
+  stubCommon(on)
+  on('turn.complete', () => ({ text: '' }))
+  await askOne($, clock)
+  await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: 'foo is in src/foo.ts', durationMs: 1, isAborted: false, reason: 'answer' })
+  const first = await $.prompt.submit({ text: 'continue', origin: { kind: 'composer' }, wait: false })
+  expect((first.context ?? []).join('\n')).toContain('foo is in src/foo.ts')
+  const second = await $.prompt.submit({ text: 'and then?', origin: { kind: 'composer' }, wait: false })
+  expect(second.context ?? []).toHaveLength(0)
 })

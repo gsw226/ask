@@ -17,6 +17,8 @@ const SIDE_PROMPT = [
 
 const entries = []
 let seq = 0
+// answered side Q&A main has not seen yet
+const unseen = []
 
 async function classify($, text) {
   try {
@@ -76,7 +78,18 @@ export function register(on) {
   on('agent.offer', { agent: AGENT }, () => ({ isOffered: false }))
 
   on('prompt.submit', async ($, e, next) => {
-    if (e.isMeta || !e.turnId || e.command || e.origin.kind !== 'composer') return next(e)
+    if (e.isMeta) {
+      // our side agent's hand-back would wake main; keep it out
+      const ours = entries.some((x) => x.agentId && e.text.includes('from="' + x.agentId + '"'))
+      return ours ? { drop: 'ask: 옆 답변 도착 (/asks)' } : next(e)
+    }
+    if (!e.turnId) {
+      if (e.command || e.origin.kind !== 'composer' || unseen.length === 0) return next(e)
+      const notes = unseen.splice(0).map((x) => 'Q: ' + x.question + '\nA: ' + x.answer).join('\n\n')
+      const ctx = 'While you were working, the user asked side questions that a read-only helper answered:\n\n' + notes
+      return next({ ...e, context: [...(e.context ?? []), ctx] })
+    }
+    if (e.command || e.origin.kind !== 'composer') return next(e)
     if ((await classify($, e.text)) !== 'question') return next(e)
     const entry = { id: ++seq, question: e.text, status: 'running', answer: '' }
     entries.push(entry)
@@ -84,5 +97,17 @@ export function register(on) {
     // drop puts the text back in the prompt box; empty it once the drop lands
     $.clock.after(300, () => clearInput($, e.text))
     return { drop: 'ask: 옆 질문으로 보냄' }
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const entry = e.agentId ? entries.find((x) => x.agentId === e.agentId) : undefined
+    if (entry) {
+      entry.status = e.isAborted ? 'failed' : 'done'
+      entry.answer = e.answer || (e.isAborted ? '중단됨' : '')
+      if (entry.status === 'done') unseen.push(entry)
+      $.ui.log('Q: ' + entry.question + '\nA: ' + entry.answer)
+      $.ui.invalidate('ui.render')
+    }
+    return next(e)
   })
 }
