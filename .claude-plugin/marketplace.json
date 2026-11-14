@@ -1,0 +1,14 @@
+{
+  "name": "gsw226",
+  "owner": {
+    "name": "gsw226"
+  },
+  "description": "gsw226's Claude Code plugins",
+  "plugins": [
+    {
+      "name": "ask",
+      "source": "./",
+      "description": "While Claude works, questions go to a read-only side agent; change requests go to the main queue"
+    }
+  ]
+}
