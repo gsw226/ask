@@ -435,7 +435,7 @@ git commit -m "feat: side-question pane with send-to-main"
 **Files:**
 - Create: `README.md`
 
-- [ ] **Step 1: Live run via cmux-cua** — launch Terminal with `claude --plugin-dir /Users/gangsang-u/Documents/GitHub/ask` from a scratch `.command` script. Give main `Run this in the foreground with Bash: python3 -c "import time; time.sleep(45)" and then reply with just DONE.` While it runs, send:
+- [ ] **Step 1: Live run via cmux-cua** — launch Terminal with `claude --plugin-dir .` from a scratch `.command` script. Give main `Run this in the foreground with Bash: python3 -c "import time; time.sleep(45)" and then reply with just DONE.` While it runs, send:
   1. `이 저장소에 뭐 있어?` → expect: input clears, `Prompt dropped by a hook: ask: 옆 질문으로 보냄`, pane opens, answer appears, yellow `ask: 옆 답변 도착 (/asks)` line, main still ends with just `DONE`.
   2. `README.md 파일 만들어줘` → expect: passes to main queue (main acts on it after the sleep).
   3. After main is idle, type `방금 옆에서 뭐 물어봤지?` → expect main answers from the attached context.
