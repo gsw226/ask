@@ -3,9 +3,9 @@ import { expect, mock, test } from 'claude-code/testing'
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const label = (text: string) => () => ({ value: { isAnswered: true, text, usage: USAGE } })
 
-function stubCommon(on: any, spawned: any[] = [], submitted: string[] = []) {
+function stubCommon(on: any, spawned: any[] = [], submitted: string[] = [], fills: any[] = []) {
   on('prompt.submit', ($: any, e: any) => { submitted.push(e.text); return { text: e.text, context: e.context } })
-  on('prompt.fill', () => ({ isFilled: true }))
+  on('prompt.fill', (_$: any, e: any) => { fills.push(e); return { isFilled: true } })
   on('session.messages', () => ({ value: [{ role: 'user', text: 'fix the parser', toolUses: [] }] }))
   on('agent.spawn', ($: any, e: any) => { spawned.push(e); return { model: 'test', agentId: 'ag' + spawned.length } })
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -47,4 +47,26 @@ test('classifier failure passes through', async ($, on) => {
   stubCommon(on)
   const r = await $.prompt.submit({ text: 'where is foo?', origin: { kind: 'composer' }, wait: false, turnId: 't1' })
   expect(r.text).toBe('where is foo?')
+})
+
+async function dropThenBox(on: any, $: any, boxText: string) {
+  const clock = mock.clock(on)
+  const fills: any[] = []
+  on('model.complete', label('question'))
+  stubCommon(on, [], [], fills)
+  on('prompt.read', () => ({ value: { text: boxText, cursor: 0 } }))
+  await $.prompt.submit({ text: 'where is foo?', origin: { kind: 'composer' }, wait: false, turnId: 't1' })
+  await clock.advance(500)
+  return fills
+}
+
+test('box still holding the dropped question is cleared', async ($, on) => {
+  const fills = await dropThenBox(on, $, 'where is foo?')
+  expect(fills).toHaveLength(1)
+  expect(fills[0].text).toBe('')
+})
+
+test('text the user typed meanwhile is left alone', async ($, on) => {
+  const fills = await dropThenBox(on, $, 'where is foo? and bar')
+  expect(fills).toHaveLength(0)
 })

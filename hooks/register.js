@@ -52,9 +52,10 @@ async function startSide($, entry) {
   $.ui.invalidate('ui.render')
 }
 
-async function clearInput($) {
+async function clearInput($, text) {
   try {
-    await $.prompt.fill({ text: '' })
+    const box = await $.prompt.read()
+    if (box.text.trim() === text.trim()) await $.prompt.fill({ text: '' })
   } catch {}
 }
 
@@ -81,7 +82,7 @@ export function register(on) {
     entries.push(entry)
     $.clock.after(0, () => startSide($, entry))
     // drop puts the text back in the prompt box; empty it once the drop lands
-    $.clock.after(300, () => clearInput($))
+    $.clock.after(300, () => clearInput($, e.text))
     return { drop: 'ask: 옆 질문으로 보냄' }
   })
 }
