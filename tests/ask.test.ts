@@ -107,3 +107,23 @@ test('next idle main prompt carries the side Q&A once', async ($, on) => {
   const second = await $.prompt.submit({ text: 'and then?', origin: { kind: 'composer' }, wait: false })
   expect(second.context ?? []).toHaveLength(0)
 })
+
+const PANE_EVENT = {
+  plugin: 'ask', component: 'Pane', requestId: 'asks', surface: 'terminal',
+  viewport: { columns: 100, rows: 30 },
+  props: { title: 'ask', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+} as const
+
+test('pane lists question, answer and a send button for failed entries', async ($, on) => {
+  const clock = mock.clock(on)
+  const submitted: string[] = []
+  on('model.complete', label('question'))
+  stubCommon(on, [], submitted)
+  on('turn.complete', () => ({ text: '' }))
+  await askOne($, clock)
+  await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: '', durationMs: 1, isAborted: true, reason: 'answer' })
+  const ui = await $.ui.mount(PANE_EVENT)
+  expect(await ui.find({ type: 'Text', text: /where is foo\?/ })).toBeDefined()
+  await ui.press({ key: 'send-1' })
+  expect(submitted).toContain('where is foo?')
+})

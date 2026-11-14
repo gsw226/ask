@@ -61,6 +61,13 @@ async function clearInput($, text) {
   } catch {}
 }
 
+function sendToMain($, entry) {
+  entry.sent = true
+  // waits until main is idle, then runs as the user's own prompt; not awaited on purpose
+  $.prompt.submit({ text: entry.question, asUser: true })
+  $.ui.invalidate('ui.render')
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     try {
@@ -70,6 +77,9 @@ export function register(on) {
         prompt: SIDE_PROMPT,
         tools: ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'],
       })
+    } catch {}
+    try {
+      await $.command.register({ name: 'asks', description: 'Show side-question answers', immediate: true })
     } catch {}
     return next(e)
   })
@@ -96,6 +106,7 @@ export function register(on) {
     $.clock.after(0, () => startSide($, entry))
     // drop puts the text back in the prompt box; empty it once the drop lands
     $.clock.after(300, () => clearInput($, e.text))
+    $.ui.open({ id: PANE, title: 'ask' }).catch(() => {})
     return { drop: 'ask: 옆 질문으로 보냄' }
   })
 
@@ -109,5 +120,27 @@ export function register(on) {
       $.ui.invalidate('ui.render')
     }
     return next(e)
+  })
+
+  on('command.run', { command: 'asks' }, async ($) => {
+    await $.ui.open({ id: PANE, title: 'ask', focus: true, closeOnEscape: true })
+    return {}
+  })
+
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== PANE) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const mark = { running: '⏳', done: '✓', failed: '✗' }
+    const rows = []
+    for (const x of entries.slice().reverse()) {
+      rows.push(Text({ bold: true, wrap: 'wrap', children: [mark[x.status] + ' ' + x.question] }))
+      if (x.answer) rows.push(Text({ wrap: 'wrap', dimColor: x.status === 'failed', children: [x.answer] }))
+      const needsMain = x.status === 'failed' || x.answer.startsWith('메인에 보낼 일')
+      if (needsMain && !x.sent) {
+        rows.push(Button({ key: 'send-' + x.id, label: '메인에 보내기', onPress: () => sendToMain($, x) }))
+      }
+      rows.push(Text({ children: [' '] }))
+    }
+    return Box({ flexDirection: 'column', children: rows })
   })
 }
