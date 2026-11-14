@@ -24,6 +24,11 @@ const rowId = (entry) => 'q-' + LOAD + '-' + entry.id
 // answered side Q&A main has not seen yet
 const unseen = []
 let cwd = ''
+// main's tool calls in flight, and those whose run-in-background pill is drawn. A row placed
+// mid-call lands between the call and its pill, so questions wait under the pill instead.
+const running = new Set()
+const pills = new Set()
+const PILL_WAIT_MS = 2000
 
 // "Read src/foo.ts", the way Claude's own tool rows read
 function stepOf(e) {
@@ -88,6 +93,19 @@ async function startSide($, entry) {
   $.ui.invalidate('ui.render')
 }
 
+function place($, entry) {
+  entry.waiting = false
+  $.ui.place({ id: rowId(entry) }).then((r) => {
+    entry.placed = r.isPlaced
+    if (!r.isPlaced && entry.status !== 'running') $.ui.log('Q: ' + entry.question + '\nA: ' + entry.answer)
+  }, () => {})
+  $.ui.invalidate('ui.render')
+}
+
+function placeWaiting($) {
+  for (const x of entries) if (x.waiting) place($, x)
+}
+
 async function clearInput($, text) {
   try {
     const box = await $.prompt.read()
@@ -143,11 +161,27 @@ export function register(on) {
     const entry = { id: ++seq, question: e.text, status: 'running', answer: '', steps: [], placed: false }
     entries.push(entry)
     // a row in the transcript, drawn like Claude's own turn; falls back to a log line at the end
-    $.ui.place({ id: rowId(entry) }).then((r) => { entry.placed = r.isPlaced }, () => {})
+    if (running.size) {
+      entry.waiting = true
+      // no pill to sit under (a quick or pill-less tool): place it anyway
+      $.clock.after(PILL_WAIT_MS, () => { if (entry.waiting && !pills.size) place($, entry) })
+    } else place($, entry)
     $.clock.after(0, () => startSide($, entry))
     // drop puts the text back in the prompt box; empty it once the drop lands
     $.clock.after(300, () => clearInput($, e.text))
     return { drop: 'ask: 옆 질문으로 보냄' }
+  })
+
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId || !e.tool_use_id) return next(e)
+    running.add(e.tool_use_id)
+    try {
+      return await next(e)
+    } finally {
+      running.delete(e.tool_use_id)
+      pills.delete(e.tool_use_id)
+      if (!running.size) placeWaiting($)
+    }
   })
 
   // /clear starts a new conversation; old side Q&A must not leak into it
@@ -163,7 +197,7 @@ export function register(on) {
       entry.status = e.isAborted || e.reason !== 'answer' || !e.answer ? 'failed' : 'done'
       entry.answer = e.answer || (e.isAborted ? '중단됨' : e.reason)
       if (entry.status === 'done') unseen.push(entry)
-      if (!entry.placed) $.ui.log('Q: ' + entry.question + '\nA: ' + entry.answer)
+      if (!entry.placed && !entry.waiting) $.ui.log('Q: ' + entry.question + '\nA: ' + entry.answer)
       $.ui.invalidate('ui.render')
     }
     return next(e)
@@ -172,31 +206,46 @@ export function register(on) {
   on('ui.render', { component: 'Placed' }, async ($, e, next) => {
     const x = e.props.plugin === $.plugin.name ? entries.find((y) => rowId(y) === e.props.id) : undefined
     if (!x) return next(e)
-    const { Box, Text, Markdown, Button } = $.ui.resolve(e)
-    const rows = [
-      Box({ flexDirection: 'row', children: [
-        Text({ dimColor: true, children: ['› '] }),
-        Text({ wrap: 'wrap', children: [x.question] }),
-        Text({ dimColor: true, children: ['  ask'] }),
-      ] }),
-    ]
-    const hidden = x.steps.length - STEPS_SHOWN
-    if (hidden > 0) rows.push(Text({ dimColor: true, children: ['  ⎿  … +' + hidden] }))
-    for (const step of x.steps.slice(-STEPS_SHOWN)) {
-      rows.push(Text({ dimColor: true, wrap: 'truncate-end', children: ['  ⎿  ' + step] }))
-    }
-    if (x.status === 'running') rows.push(Text({ dimColor: true, children: ['  ⎿  …'] }))
-    if (x.answer) {
-      rows.push(Box({ flexDirection: 'row', children: [
-        Text({ dimColor: x.status === 'failed', children: ['● '] }),
-        Box({ flexDirection: 'column', flexShrink: 1, children: [Markdown({ text: x.answer, dimColor: x.status === 'failed' })] }),
-      ] }))
-    }
-    // the side agent opens its answer with "메인에 보낼 일:" (maybe in markdown) when a change is needed
-    const needsMain = x.status === 'failed' || /^[\s*_>#-]*메인에 보낼 일/.test(x.answer)
-    if (needsMain && !x.sent) {
-      rows.push(Box({ paddingLeft: 2, children: [Button({ key: 'send-' + x.id, label: '메인에 보내기', onPress: () => sendToMain($, x) })] }))
-    }
-    return Box({ flexDirection: 'column', marginTop: 1, children: rows })
+    return drawEntry($, $.ui.resolve(e), x)
   })
+
+  // questions asked mid-call are drawn under the pill until the call ends
+  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
+    if (e.props.kind !== 'background_hint') return next(e)
+    pills.add(e.props.tool_use_id)
+    const waiting = entries.filter((x) => x.waiting)
+    if (!waiting.length || e.props.tool_use_id !== pills.values().next().value) return next(e)
+    const ui = $.ui.resolve(e)
+    // the engine's own pill first, as it draws it
+    const rows = [await next(e), ...waiting.map((x) => drawEntry($, ui, x))]
+    return ui.Box({ flexDirection: 'column', children: rows })
+  })
+}
+
+function drawEntry($, { Box, Text, Markdown, Button }, x) {
+  const rows = [
+    Box({ flexDirection: 'row', children: [
+      Text({ dimColor: true, children: ['› '] }),
+      Text({ wrap: 'wrap', children: [x.question] }),
+      Text({ dimColor: true, children: ['  ask'] }),
+    ] }),
+  ]
+  const hidden = x.steps.length - STEPS_SHOWN
+  if (hidden > 0) rows.push(Text({ dimColor: true, children: ['  ⎿  … +' + hidden] }))
+  for (const step of x.steps.slice(-STEPS_SHOWN)) {
+    rows.push(Text({ dimColor: true, wrap: 'truncate-end', children: ['  ⎿  ' + step] }))
+  }
+  if (x.status === 'running') rows.push(Text({ dimColor: true, children: ['  ⎿  …'] }))
+  if (x.answer) {
+    rows.push(Box({ flexDirection: 'row', children: [
+      Text({ dimColor: x.status === 'failed', children: ['● '] }),
+      Box({ flexDirection: 'column', flexShrink: 1, children: [Markdown({ text: x.answer, dimColor: x.status === 'failed' })] }),
+    ] }))
+  }
+  // the side agent opens its answer with "메인에 보낼 일:" (maybe in markdown) when a change is needed
+  const needsMain = x.status === 'failed' || /^[\s*_>#-]*메인에 보낼 일/.test(x.answer)
+  if (needsMain && !x.sent) {
+    rows.push(Box({ paddingLeft: 2, children: [Button({ key: 'send-' + x.id, label: '메인에 보내기', onPress: () => sendToMain($, x) })] }))
+  }
+  return Box({ flexDirection: 'column', marginTop: 1, children: rows })
 }

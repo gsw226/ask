@@ -64,6 +64,9 @@ Claude Code mod (JS 플러그인, CLI v2.1.287+). 래퍼 TUI(Agent SDK)와 setti
   그래서 실행 중 1초마다 `$.session.messages({ agentId })`의 `toolUses`를 읽는다.
 - 행 id는 모듈 로드마다 달라야 한다(같은 id면 새 행 대신 예전 행을 다시 그린다).
 - 행을 못 두면(`isPlaced: false`) 답을 `$.ui.log`로 남긴다.
+- (2026-11-15) 메인 도구가 실행 중이면 행을 바로 두지 않는다. 바로 두면 도구 줄과 `(ctrl+b to run in background)` 힌트 사이에 낀다.
+  그동안은 `ToolProgress` 렌더 훅이 엔진 힌트(`next(e)`) 아래에 블록을 그리고, 메인 `tool.call`이 다 끝나면 행을 둔다.
+  2초 안에 힌트가 안 뜨는 도구면 그냥 행을 둔다.
 
 ## 기록
 

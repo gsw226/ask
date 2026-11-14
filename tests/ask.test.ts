@@ -7,14 +7,14 @@ const label = (text: string) => () => ({ value: { isAnswered: true, text, usage:
 const agentReads: Record<string, string[]> = {}
 const agentMessages = (id: string) => [{ role: 'assistant', text: '', toolUses: (agentReads[id] ?? []).map((f, i) => ({ tool_use_id: 'u' + i, tool: 'Read', input: { file_path: f } })) }]
 
-type Stubs = { spawned?: any[], submitted?: string[], fills?: any[], logs?: string[], dropResubmit?: boolean, placeOk?: boolean }
+type Stubs = { placed?: string[], spawned?: any[], submitted?: string[], fills?: any[], logs?: string[], dropResubmit?: boolean, placeOk?: boolean }
 
-function stubCommon(on: any, { spawned = [], submitted = [], fills = [], logs = [], dropResubmit = false, placeOk = true }: Stubs = {}) {
+function stubCommon(on: any, { placed = [], spawned = [], submitted = [], fills = [], logs = [], dropResubmit = false, placeOk = true }: Stubs = {}) {
   on('prompt.submit', ($: any, e: any) => { submitted.push(e.text); return dropResubmit && !e.turnId ? { drop: 'removed' } : { text: e.text, context: e.context } })
   on('prompt.fill', (_$: any, e: any) => { fills.push(e); return { isFilled: true } })
   on('session.messages', (_$: any, e: any) => ({ value: e.agentId ? agentMessages(e.agentId) : [{ role: 'user', text: 'fix the parser', toolUses: [] }] }))
   on('agent.spawn', ($: any, e: any) => { spawned.push(e); return { model: 'test', result: { status: 'async_launched', agentId: 'ag' + spawned.length, description: 'd', prompt: 'p', outputFile: '/tmp/o' } } })
-  on('ui.place', (_$: any, e: any) => ({ value: placeOk ? ((placedId = e.id), { isPlaced: true, requestId: 'r1' }) : { isPlaced: false, reason: 'no surface' } }))
+  on('ui.place', (_$: any, e: any) => ({ value: placeOk ? (placed.push(e.id), (placedId = e.id), { isPlaced: true, requestId: 'r1' }) : { isPlaced: false, reason: 'no surface' } }))
   on('ui.log', (_$: any, e: any) => { logs.push(e.text); return { value: undefined } })
 }
 
@@ -266,4 +266,41 @@ test('an answer that only mentions "메인에 보낼 일" mid-text gets no butto
   await $.turn.complete({ turnId: 's1', agentId: 'ag1', answer: 'The mod shows a button when the answer says "메인에 보낼 일".', durationMs: 1, isAborted: false, reason: 'answer' })
   const ui = await $.ui.mount(rowEvent())
   expect(await ui.find({ key: 'send-1' })).toBeUndefined()
+})
+
+test('a question asked mid-call waits under the pill, then gets its row when the call ends', async ($, on) => {
+  const clock = mock.clock(on)
+  const placed: string[] = []
+  let finish = () => {}
+  let callId = ''
+  on('model.complete', label('question'))
+  stubCommon(on, { placed })
+  on('tool.call', (_$: any, e: any) => { callId = e.tool_use_id; return new Promise((res) => { finish = () => res({ result: 'ok' }) }) })
+  const call = $.tool.call({ tool: 'Bash', command: 'sleep 60' } as any)
+  await clock.advance(10)
+  expect(callId).not.toBe('')
+  await askOne($, clock)
+  expect(placed).toHaveLength(0)
+  const pill = await $.ui.mount({ ...ROW_EVENT, component: 'ToolProgress', props: { tool_use_id: callId, kind: 'background_hint', hint: '(ctrl+b to run in background)' } } as any)
+  expect(await pill.find({ type: 'Text', text: /where is foo\?/ })).toBeDefined()
+  await clock.advance(3000)
+  expect(placed).toHaveLength(0)
+  finish()
+  await call
+  await clock.advance(10)
+  expect(placed).toHaveLength(1)
+})
+
+test('a question asked mid-call with no pill is placed after a short wait', async ($, on) => {
+  const clock = mock.clock(on)
+  const placed: string[] = []
+  on('model.complete', label('question'))
+  stubCommon(on, { placed })
+  on('tool.call', () => new Promise(() => {}))
+  $.tool.call({ tool: 'WebFetch', url: 'https://example.com' } as any)
+  await clock.advance(10)
+  await askOne($, clock)
+  expect(placed).toHaveLength(0)
+  await clock.advance(2000)
+  expect(placed).toHaveLength(1)
 })
