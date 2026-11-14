@@ -35,7 +35,7 @@ Claude Code mod (JS 플러그인, CLI v2.1.287+). 래퍼 TUI(Agent SDK)와 setti
         └─ 애매/실패/타임아웃 → next(e)
 ```
 
-- busy 판정: `turn.start` / `turn.complete` 중 `e.agentId`가 없는 메인 턴만 추적.
+- busy 판정: `e.turnId`가 있으면 busy (스파이크 결과 1).
 - 분류 기준
   - `change`: 파일·코드·설정 변경 요청, 메인 작업에 대한 지시·방향 전환, 메인이 알아야 할 정보 제공.
   - `question`: 무언가를 묻기만 하고 변경을 요구하지 않는 것.
@@ -43,8 +43,8 @@ Claude Code mod (JS 플러그인, CLI v2.1.287+). 래퍼 TUI(Agent SDK)와 setti
 ## 옆 에이전트
 
 - 질문 1개당 `$.agent.spawn` 1개. 동시 실행 제한 없음.
-- **읽기 전용 강제**: `tool.check` 훅에서 우리 에이전트의 호출(`e.agentId`로 식별)이 `isReadOnly`가 아니면 deny.
-  허용 범위는 Read, Grep, Glob, 읽기 전용 Bash, WebSearch, WebFetch. 이유: 메인과의 파일 충돌 방지.
+- **읽기 전용 강제**: `$.agent.register`로 `ask:side` 타입을 tools `Read, Grep, Glob, WebSearch, WebFetch`로 등록 (Bash 제외).
+  메인 모델에게는 `agent.offer`로 숨김. 이유: 메인과의 파일 충돌 방지.
 - **맥락 주입**: spawn 프롬프트 = 질문 + `$.session.messages()` 최근 30개(최대 8,000자로 자름) +
   역할 지시("옆 질문 담당, 읽기만, 짧게 답, 수정이 필요하면 '메인에 보낼 일'이라고 말할 것").
 - 메인이 Esc로 중단돼도 옆 에이전트는 계속 돈다.
@@ -61,15 +61,20 @@ Claude Code mod (JS 플러그인, CLI v2.1.287+). 래퍼 TUI(Agent SDK)와 setti
 2. 다음 메인 턴의 `prompt.submit`에서 그 사이 오간 옆 Q&A 요약을 `context`로 첨부 (Claude만 읽음).
    메인 턴 도중에는 끼워넣지 않는다.
 
-## 스파이크 (1단계, 설계 분기점)
+## 스파이크 결과 (2026-11-14, CLI 2.1.325, cmux-cua로 실세션 검증)
 
-로그만 찍는 mod로 확인:
-
-1. busy 중 Enter 시점에 `prompt.submit`이 발동하는가, 아니면 큐에서 꺼내 주입할 때 발동하는가.
-   - Enter 시점 → 위 설계대로 자동 분기.
-   - 주입 시점 → 자동 분기 불가. `immediate: true` 커맨드(예: `/a <질문>`)로 대체하고, 분류는 생략(커맨드 자체가 질문 표시).
-2. `{ drop }`은 텍스트를 입력창에 되돌리고 "Prompt dropped" 메시지를 띄운다(문서 기준).
-   빌드의 타입 정의에서 조용히 소비하는 방법을 찾는다. 없으면 drop 후 입력창을 비우는 방법(`$.prompt.fill` 등)을 확인.
+1. **`prompt.submit`은 Enter 시점에 발동한다.** 메인 턴 도중 입력도 즉시 훅을 탄다.
+   busy 판정은 턴 추적 대신 `e.turnId` 존재 여부로 한다 (idle이면 없음).
+   사용자 입력은 `e.origin.kind === 'composer'`.
+2. **drop 시 텍스트가 입력창에 되돌아온다.** `$.clock.after(300)` 후 `$.prompt.fill({ text: '' })`로 비우면 된다.
+   스피너 아래에 `Prompt dropped by a hook: <reason>`이 잠깐 뜨므로 reason을 안내 문구로 쓴다.
+3. **`$.agent.spawn`은 백그라운드로 즉시 resolve**(`{ model, agentId }`)하고, 답은 그 agentId의 `turn.complete`의 `e.answer`로 온다.
+   훅이 끝난 뒤에도 `$.clock.after` 콜백에서 `$` 호출이 동작한다.
+4. **읽기 전용은 에이전트 정의로 강제한다.** `$.agent.register({ name, tools: [...] })`로 등록하면 쓰기 도구가 아예 없다(실측: x.txt 생성 실패).
+   `agent.offer`에서 `{ isOffered: false }`로 메인 모델에게는 숨긴다. → `tool.check` 가드는 불필요해서 삭제한다.
+5. **⚠️ 서브에이전트의 hand-back이 메인으로 들어온다.** `isMeta: true`, `origin.kind: 'peer'`, 본문이 `<agent-message from="<agentId>">`로 시작하는 `prompt.submit`이다.
+   `session.receive`는 발동하지 않았다. → `prompt.submit`에서 우리 agentId면 drop한다.
+   이때 트랜스크립트에 노란 `Prompt dropped by a hook: <reason>` 줄이 남으므로, 이것을 "답변 도착" 기록 줄로 쓴다.
 
 ## 파일
 
@@ -88,7 +93,8 @@ hooks/register.test.js    # claude plugin test
 - busy + question → 메인 미전달 + spawn 호출
 - busy + change → 통과
 - 분류기 실패/타임아웃 → 통과
-- 우리 에이전트의 비읽기 도구 → deny / 메인의 쓰기 도구 → 영향 없음
+- 우리 에이전트 hand-back(meta) → drop / 남의 meta → 통과
+- 에이전트 등록 시 tools에 쓰기 도구 없음
 
 수동: `claude --plugin-dir .`로 긴 작업을 시키고 질문과 수정 요청을 섞어 입력.
 
