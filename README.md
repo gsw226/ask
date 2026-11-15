@@ -29,3 +29,7 @@ Tested with Claude Code 2.1.325.
 ## Test
 
     claude plugin test
+
+## License
+
+MIT
